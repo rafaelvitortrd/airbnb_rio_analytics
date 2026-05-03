@@ -1,3 +1,6 @@
+# Aplicação Web para Estatística Descritiva - Parte 2
+# Aluno: Rafael Vitor T R Dutra
+
 import streamlit as st
 import pandas as pd
 import numpy as np
