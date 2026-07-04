@@ -1,6 +1,3 @@
-# Aplicação Web para Estatística Inferencial e Probabilidade - Parte 3
-# Aluno: Rafael Vitor T R Dutra
-
 import logging
 logging.getLogger("streamlit.runtime.scriptrunner.script_runner").setLevel(logging.ERROR)
 
@@ -126,7 +123,7 @@ if len(df_filt) > 5:
         fig2 = px.box(df_filt, x="neighbourhood_cleansed", y="review_scores_value", color="room_type",
                       template="plotly_white", height=450, labels=traducoes, range_y=[1, 5])
         st.plotly_chart(fig2, use_container_width=True)
-        st.caption("Ajuste por Filtro: Mede a dispersão, mediana e a presença of outliers (pontos fora da curva) na percepção de Custo-Benefício comparando as regiões escolhidas.")
+        st.caption("Ajuste por Filtro: Mede a distribuição e a presença de ovelhas negras (outliers) na percepção de Custo-Benefício comparando as regiões escolhidas.")
 
     st.divider()
 
@@ -142,64 +139,112 @@ if len(df_filt) > 5:
 
     st.divider()
 
-    st.write("### 5. Teste de Hipótese Inferencial: Preço vs. Percepção de Custo-Benefício")
-    df_reg = df_filt.dropna(subset=['price', 'review_scores_value'])
+    st.write("### 5. Regressão Linear por Grade Espacial e Diagnóstico de Moran Matricial")
     
-    if len(df_reg) > 2:
-        slope, intercept, r_value, p_value, std_err = stats.linregress(df_reg['price'], df_reg['review_scores_value'])
-        r_squared = r_value ** 2
+    df_spatial = df_filt.dropna(subset=['latitude', 'longitude', 'review_scores_value', 'price']).copy()
+    
+    if len(df_spatial) > 10:
+        st.markdown(r"""
+        **Ajuste Teórico e Estrutura Inferencial:**
+        Os pontos brutos individuais violam os pressupostos teóricos clássicos onde a covariância entre os termos de erro de observações distintas deve ser estritamente nula ($Cov(\epsilon_i, \epsilon_j) = 0$). 
+        A fim de readequar as propriedades da matriz de variância-covariância $\Sigma$, implementa-se uma estrutura de agregação espacial baseada em **Grade Geográfica Regional (~500m)**. 
+        A análise estatística é computada por bairro isolado para controlar os efeitos de **Heterogeneidade Espacial**.
+        """)
         
-        df_reg['predicted'] = intercept + slope * df_reg['price']
-        df_reg['residuals'] = df_reg['review_scores_value'] - df_reg['predicted']
+        df_spatial['grid_lat'] = np.round(df_spatial['latitude'] / 0.005) * 0.005
+        df_spatial['grid_lon'] = np.round(df_spatial['longitude'] / 0.005) * 0.005
         
-        c_graf5, c_txt5 = st.columns([2, 1])
+        df_grid = df_spatial.groupby(['neighbourhood_cleansed', 'grid_lat', 'grid_lon']).agg({
+            'price': 'mean',
+            'review_scores_value': 'mean',
+            'accommodates': 'sum'
+        }).reset_index()
         
-        with c_graf5:
-            # Gerar o gráfico base com os pontos dispersos
-            fig_reg = px.scatter(df_reg, x="price", y="review_scores_value", opacity=0.4, 
-                                 template="plotly_white", height=450, color_discrete_sequence=['#10b981'], labels=traducoes)
+        bairro_analise = st.selectbox("Selecione o Bairro para o Diagnóstico Inferencial Espacial:", options=df_grid['neighbourhood_cleansed'].unique())
+        df_grid_bairro = df_grid[df_grid['neighbourhood_cleansed'] == bairro_analise].copy()
+        
+        if len(df_grid_bairro) > 3:
+            slope, intercept, r_value, p_value, std_err = stats.linregress(df_grid_bairro['price'], df_grid_bairro['review_scores_value'])
+            df_grid_bairro['predicted'] = intercept + slope * df_grid_bairro['price']
+            df_grid_bairro['residuals'] = df_grid_bairro['review_scores_value'] - df_grid_bairro['predicted']
             
-            # Ajustar os limites do eixo X dinamicamente para ancorar a reta nas extremidades exatas
-            x_min, x_max = float(df_reg['price'].min()), float(df_reg['price'].max())
-            x_reg = np.linspace(x_min, x_max, 100)
-            y_reg = slope * x_reg + intercept
+            c_graf5, c_txt5 = st.columns([2, 1])
             
-            # Adicionar a reta com garantia de visibilidade e largura reforçada
-            fig_reg.add_trace(go.Scatter(x=x_reg, y=y_reg, mode='lines', 
-                                         line=dict(color='#ef4444', width=4), 
-                                         name='Reta de Regressão'))
-            
-            # Configuração final para garantir que o Plotly não oculte a trace
-            fig_reg.update_layout(showlegend=True, yaxis=dict(autorange=True))
-            st.plotly_chart(fig_reg, use_container_width=True)
-            
-        with c_txt5:
-            st.markdown("**Modelo de Regressão Linear Populacional:**")
-            st.latex(r"Y = \beta_0 + \beta_1 X + \epsilon")
-            st.markdown(f"**Equação Ajustada:**")
-            st.code(f"Custo-Benefício = {intercept:.4f} + ({slope:.4f}) * Preço")
-            
-            st.markdown("---")
-            st.markdown("**Métricas de Validação Inferencial:**")
-            st.metric("Variância Explicada ($R^2$)", f"{r_squared:.4f}")
-            st.metric("p-valor Calculado", f"{p_value:.4e}")
-            
-            if p_value < 0.05:
-                st.success("✔️ Rejeita-se H0: O impacto do preço na nota é estatisticamente significante (Confiança >= 95%).")
-            else:
-                st.warning("⚠️ Não se rejeita H0: Não há evidência estatística de dependência linear na amostra atual.")
+            with c_graf5:
+                fig_reg = px.scatter(df_grid_bairro, x="price", y="review_scores_value", opacity=0.8, 
+                                     template="plotly_white", height=450, color_discrete_sequence=['#10b981'],
+                                     title=f"Tendência Regionalizada: {bairro_analise}",
+                                     labels={'price': 'Preço Médio Regional (R$)', 'review_scores_value': 'Custo-Benefício Médio Regional'})
                 
-            st.caption("Nota de leitura: A inclinação da reta vermelha determina se cobrar mais caro diminui (reta descendente) ou aumenta a nota dada pelo hóspede.")
+                x_min, x_max = float(df_grid_bairro['price'].min()), float(df_grid_bairro['price'].max())
+                x_reg = np.linspace(x_min, x_max, 100)
+                y_reg = slope * x_reg + intercept
+                
+                fig_reg.add_trace(go.Scatter(x=x_reg, y=y_reg, mode='lines', 
+                                             line=dict(color='#ef4444', width=4), 
+                                             name='Reta de Regressão por Grade Espacial'))
+                st.plotly_chart(fig_reg, use_container_width=True)
+                
+            with c_txt5:
+                st.markdown(f"**Modelo Linear Ajustado ({bairro_analise}):**")
+                st.code(f"Custo-Benefício = {intercept:.4f} + ({slope:.4f}) * Preço")
+                st.markdown("---")
+                st.markdown("**Métricas de Validação da Regressão:**")
+                st.metric("Variância Explicada ($R^2$ Regional)", f"{r_value**2:.4f}")
+                st.metric("p-valor do Modelo (Preço)", f"{p_value:.4e}")
+                
+                if p_value < 0.05:
+                    st.success("✔️ Relação preço/nota estatisticamente significante neste bairro.")
+                else:
+                    st.warning("⚠️ Relação preço/nota não linear significante neste bairro.")
 
-        st.write("#### Diagnóstico do Modelo: Distribution dos Resíduos (Erros)")
-        fig_res = px.scatter(df_reg, x="price", y="residuals", opacity=0.5, template="plotly_white", height=300,
-                             color_discrete_sequence=['#64748b'], labels={'price': 'Preço', 'residuals': 'Resíduo (Erro)'})
-        fig_res.add_hline(y=0, line_dash="dash", line_color="red", line_width=2)
-        st.plotly_chart(fig_res, use_container_width=True)
-        st.caption("Validação Teórica: Para a regressão linear ser válida inferencialmente, os erros devem estar espalhados aleatoriamente ao redor da linha vermelha zero (Homocedasticidade), sem formar desenhos geométricos ou funis.")
+            st.write("#### Diagnóstico de Autocorrelação Espacial nos Resíduos (Índice de Moran Global)")
+            
+            coords = df_grid_bairro[['grid_lat', 'grid_lon']].values
+            residuos = df_grid_bairro['residuals'].values
+            z = residuos - np.mean(residuos)
+            
+            dist_matrix = np.sqrt(np.sum((coords[:, np.newaxis, :] - coords[np.newaxis, :, :]) ** 2, axis=-1))
+            np.fill_diagonal(dist_matrix, np.inf) 
+            
+            W = 1.0 / (dist_matrix + 1e-5)
+            row_sums = W.sum(axis=1)
+            W = W / row_sums[:, np.newaxis]
+            
+            num = np.sum(W * z[:, np.newaxis] * z[np.newaxis, :])
+            den = np.sum(z ** 2)
+            moran_i = float(num / den) if den != 0 else 0.0
+            
+            n_moran = len(residuos)
+            expected_moran = -1.0 / (n_moran - 1) if n_moran > 1 else 0.0
+            se_moran = np.sqrt(2.0 / (n_moran * (n_moran + 1))) if n_moran > 1 else 1.0
+            z_score_moran = (moran_i - expected_moran) / se_moran
+            p_value_moran = 2 * (1 - stats.norm.cdf(abs(z_score_moran)))
 
+            c_res, c_moran = st.columns([2, 1])
+            
+            with c_res:
+                fig_res = px.scatter(df_grid_bairro, x="price", y="residuals", opacity=0.7, template="plotly_white", height=300,
+                                     color_discrete_sequence=['#64748b'], labels={'price': 'Preço Regional (R$)', 'residuals': 'Resíduo Vetorial'})
+                fig_res.add_hline(y=0, line_dash="dash", line_color="red", line_width=2)
+                st.plotly_chart(fig_res, use_container_width=True)
+                
+            with c_moran:
+                st.markdown("**Teste de Hipótese dos Erros (Moran):**")
+                st.latex(r"I = \frac{N}{W} \frac{\sum_{i} \sum_{j} w_{ij} z_i z_j}{\sum_{i} z_i^2}")
+                st.metric("Índice de Moran (I)", f"{moran_i:.4f}")
+                st.metric("p-valor de Moran", f"{p_value_moran:.4f}")
+                
+                st.markdown(r"**$H_0$ (Hipótese Nula):** Os resíduos da regressão são distribuídos aleatoriamente e independentes no espaço ($I = 0$).")
+                
+                if p_value_moran > 0.05:
+                    st.success(f"✔️ Sucesso (H0 não rejeitado): p-valor > 0.05. Os resíduos em {bairro_analise} apresentam independência espacial completa, atendendo aos pressupostos teóricos.")
+                else:
+                    st.danger(f"❌ Rejeita-se H0: p-valor < 0.05. Os resíduos retêm autocorrelação espacial estrutural significativa.")
+        else:
+            st.warning(f"Pontos de grade insuficientes em {bairro_analise} para computar a análise.")
     else:
-        st.warning("Dados insuficientes para calcular a regressão linear.")
+        st.warning("Dados insuficientes para estruturação espacial.")
 
     st.divider()
 
